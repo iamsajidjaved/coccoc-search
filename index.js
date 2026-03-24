@@ -280,17 +280,17 @@ function saveProgress(progressPath, progress) {
 
   // Proxy logic: order new proxy, then get current proxy
   let proxy;
-  try {
-    await orderNewProxy();
-    proxy = await getCurrentProxy();
-    console.log('Using proxy:', proxy);
-  } catch (err) {
-    console.error('Proxy setup failed:', err.message || err);
-    process.exit(1);
-  }
-
-  const extensionPath = path.join(__dirname, 'rektcaptcha');
-  const browser = await puppeteer.launch({
+        const progressPath = path.join(__dirname, 'progress.json');
+        const progress = loadProgress(progressPath);
+        if (resetFlag) {
+          // Clear progress.json
+          try {
+            fs.writeFileSync(progressPath, JSON.stringify({ completed: {} }, null, 2), 'utf-8');
+            console.log('Progress has been reset.');
+          } catch (err) {
+            console.error('Failed to reset progress file:', err);
+          }
+        }
     headless: false,
     args: [
       '--no-sandbox',
