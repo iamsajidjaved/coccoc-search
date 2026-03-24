@@ -52,6 +52,19 @@ npm start
 
 ## License
 MIT License
+## Running with pm2 (auto-restart & crash-resume)
+
+To keep the process running and automatically resume from the last progress if it crashes or your server restarts, use [pm2](https://pm2.keymetrics.io/):
+
+1. Install pm2 globally (if not already):
+   ```sh
+   npm install -g pm2
+   ```
+2. Start the script with pm2:
+   ```sh
+   pm2 start index.js --name coccoc-bot
+   ```
+3. pm2 will restart the process if it crashes or exits unexpectedly. The script will resume from the last saved point in `progress.json`.
 
 ## Author
 Telegram: @iamsajidjaved
