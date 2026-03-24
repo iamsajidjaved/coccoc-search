@@ -41,12 +41,7 @@ try {
 const CAPTCHA_TIMEOUT = config.CAPTCHA_TIMEOUT || 120000;
 const PAGE_LOAD_TIMEOUT = config.PAGE_LOAD_TIMEOUT || 60000;
 const FORM_SELECTOR_TIMEOUT = config.FORM_SELECTOR_TIMEOUT || 30000;
-const URL_TYPING_DELAY = config.URL_TYPING_DELAY || 120;
 const URL_TYPING_RETRIES = config.URL_TYPING_RETRIES || 3;
-const URL_TYPING_RETRY_DELAY = config.URL_TYPING_RETRY_DELAY || 80;
-const URL_TYPING_FOCUS_DELAY = config.URL_TYPING_FOCUS_DELAY || 30;
-const POST_SUBMIT_WAIT = config.POST_SUBMIT_WAIT || 5000;
-const BETWEEN_SUBMISSION_DELAY = config.BETWEEN_SUBMISSION_DELAY || 1000;
 
 async function submitToCocCoc(browser, url) {
   const page = await browser.newPage();
@@ -288,7 +283,6 @@ async function parseSitemap(xml) {
 
 async function orderNewProxy() {
   if (!config.PROXY_API_KEY) throw new Error('PROXY_API_KEY not set in environment or config.json');
-  let waitTime = 0;
   while (true) {
     try {
       const res = await axios.get(`${config.PROXY_API_BASE}/getNewProxy?access_token=${config.PROXY_API_KEY}`);
