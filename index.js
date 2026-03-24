@@ -297,7 +297,8 @@ async function main() {
         console.log('Submitting:', pageUrl);
         let success = false;
         let retryCount = 0;
-        while (!success && retryCount < 3) {
+        const MAX_RETRIES = 10;
+        while (!success && retryCount < MAX_RETRIES) {
           console.log('Submitting:', pageUrl, retryCount > 0 ? `(retry ${retryCount})` : '');
           try {
             await submitToCocCoc(browser, pageUrl);
@@ -317,7 +318,10 @@ async function main() {
                 console.log('Using new proxy:', proxy);
               } catch (proxyErr) {
                 console.error('Proxy rotation failed:', proxyErr.message || proxyErr);
-                break;
+                // Wait before next retry to avoid hammering the proxy API
+                await new Promise(resolve => setTimeout(resolve, 5000));
+                retryCount++;
+                continue;
               }
               browser = await puppeteer.launch({
                 headless: false,
@@ -329,6 +333,8 @@ async function main() {
                   `--proxy-server=${proxy}`,
                 ],
               });
+              // Wait before next retry to avoid hammering the proxy API
+              await new Promise(resolve => setTimeout(resolve, 3000));
             } else {
               // For other errors, do not retry
               break;
