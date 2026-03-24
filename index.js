@@ -297,9 +297,9 @@ async function main() {
         console.log('Submitting:', pageUrl);
         let success = false;
         let retryCount = 0;
-        const MAX_RETRIES = 10;
+        const MAX_RETRIES = 20;
         while (!success && retryCount < MAX_RETRIES) {
-          console.log('Submitting:', pageUrl, retryCount > 0 ? `(retry ${retryCount})` : '');
+          console.log('Submitting:', pageUrl, retryCount > 0 ? `(retry ${retryCount})` : '', '| Proxy:', proxy);
           try {
             await submitToCocCoc(browser, pageUrl);
             success = true;
