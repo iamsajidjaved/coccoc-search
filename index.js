@@ -459,49 +459,61 @@ async function main() {
   }
 
   for (const domain of domains) {
-    if (!progress.completed[domain]) progress.completed[domain] = [];
+    try {
+      log.info(`Starting processing for domain: ${log.url(domain)}`);
+      if (!progress.completed[domain]) progress.completed[domain] = [];
 
-    // Optionally submit the domain root
-    if (config.SUBMIT_DOMAINS) {
-      const rootUrl = domain.replace(/\/$/, '');
-      if (!progress.completed[domain].includes(rootUrl)) {
-        const success = await submitUrlWithRetry(rootUrl);
-        if (success) {
-          progress.completed[domain].push(rootUrl);
-          saveProgress(progressPath, progress);
-        }
-      } else {
-        log.info(`Skipping (already done): ${log.url(rootUrl)}`);
-      }
-    }
-
-    // Optionally submit sitemaps
-    if (config.SUBMIT_SITEMAPS) {
-      const sitemapIndexUrl = domain.replace(/\/$/, '') + '/sitemap_index.xml';
-      log.step(`Analyzing sitemap index: ${log.url(sitemapIndexUrl)}`);
-      const sitemapIndexXML = await fetchXML(sitemapIndexUrl);
-      if (!sitemapIndexXML) continue;
-      
-      const sitemapUrls = await parseSitemapIndex(sitemapIndexXML);
-      for (const sitemapUrl of sitemapUrls) {
-        log.step(`Reading sitemap: ${log.url(sitemapUrl)}`);
-        const sitemapXML = await fetchXML(sitemapUrl);
-        if (!sitemapXML) continue;
-        
-        const pageUrls = await parseSitemap(sitemapXML);
-        for (const pageUrl of pageUrls) {
-          if (progress.completed[domain].includes(pageUrl)) {
-            log.info(`Skipping (already done): ${log.url(pageUrl)}`);
-            continue;
-          }
-
-          const success = await submitUrlWithRetry(pageUrl);
+      // Optionally submit the domain root
+      if (config.SUBMIT_DOMAINS) {
+        const rootUrl = domain.replace(/\/$/, '');
+        if (!progress.completed[domain].includes(rootUrl)) {
+          const success = await submitUrlWithRetry(rootUrl);
           if (success) {
-            progress.completed[domain].push(pageUrl);
+            progress.completed[domain].push(rootUrl);
             saveProgress(progressPath, progress);
           }
+        } else {
+          log.info(`Skipping (already done): ${log.url(rootUrl)}`);
         }
       }
+
+      // Optionally submit sitemaps
+      if (config.SUBMIT_SITEMAPS) {
+        const sitemapIndexUrl = domain.replace(/\/$/, '') + '/sitemap_index.xml';
+        log.step(`Analyzing sitemap index: ${log.url(sitemapIndexUrl)}`);
+        const sitemapIndexXML = await fetchXML(sitemapIndexUrl);
+        if (!sitemapIndexXML) {
+          log.warn(`Could not fetch sitemap index for ${domain}, skipping sitemaps.`);
+        } else {
+          const sitemapUrls = await parseSitemapIndex(sitemapIndexXML);
+          for (const sitemapUrl of sitemapUrls) {
+            log.step(`Reading sitemap: ${log.url(sitemapUrl)}`);
+            const sitemapXML = await fetchXML(sitemapUrl);
+            if (!sitemapXML) {
+              log.warn(`Could not fetch sitemap ${sitemapUrl}, skipping this sitemap.`);
+              continue;
+            }
+            
+            const pageUrls = await parseSitemap(sitemapXML);
+            for (const pageUrl of pageUrls) {
+              if (progress.completed[domain].includes(pageUrl)) {
+                log.info(`Skipping (already done): ${log.url(pageUrl)}`);
+                continue;
+              }
+
+              const success = await submitUrlWithRetry(pageUrl);
+              if (success) {
+                progress.completed[domain].push(pageUrl);
+                saveProgress(progressPath, progress);
+              }
+            }
+          }
+        }
+      }
+    } catch (domainErr) {
+      log.error(`Critical error processing domain ${domain}:`, domainErr.message);
+      log.info(`Skipping to next domain...`);
+      // Continue to next domain in the list
     }
   }
 
