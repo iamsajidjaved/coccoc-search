@@ -1,10 +1,13 @@
 
+
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const xml2js = require('xml2js');
+const os = require('os');
+const { v4: uuidv4 } = require('uuid');
 
 
 // Proxy API integration
@@ -290,9 +293,18 @@ async function main() {
     process.exit(1);
   }
 
+
   const extensionPath = path.join(__dirname, 'rektcaptcha');
+  // Helper to create a fresh userDataDir for each browser launch
+  function getTempUserDataDir() {
+    const dir = path.join(os.tmpdir(), 'puppeteer-profile-' + uuidv4());
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+  let userDataDir = getTempUserDataDir();
   let browser = await puppeteer.launch({
     headless: false,
+    userDataDir,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -332,8 +344,12 @@ async function main() {
                 retryCount++;
                 continue;
               }
+              // Clean up previous userDataDir
+              try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch {}
+              userDataDir = getTempUserDataDir();
               browser = await puppeteer.launch({
                 headless: false,
+                userDataDir,
                 args: [
                   '--no-sandbox',
                   '--disable-setuid-sandbox',
@@ -398,8 +414,12 @@ async function main() {
                   retryCount++;
                   continue;
                 }
+                // Clean up previous userDataDir
+                try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch {}
+                userDataDir = getTempUserDataDir();
                 browser = await puppeteer.launch({
                   headless: false,
+                  userDataDir,
                   args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
@@ -426,6 +446,8 @@ async function main() {
   }
 
   await browser.close();
+  // Clean up last userDataDir
+  try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch {}
 }
 
 main();
