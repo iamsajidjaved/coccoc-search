@@ -78,62 +78,56 @@ async function submitToCocCoc(browser, url) {
     });
 
     console.log('Entering URL:', url);
+
     // Clear the input field first
     await page.evaluate(() => {
       const input = document.querySelector('input#site');
       if (input) input.value = '';
     });
 
-    // Type the URL with a small delay between keystrokes
-    await page.type('input#site', url, { delay: 100 });
-    
-    // Multiple checks to ensure URL is fully entered
-    console.log('Verifying URL entry...');
-    await page.waitForFunction((expected) => {
-      const input = document.querySelector('input#site');
-      return input && input.value === expected;
-    }, { timeout: 20000 }, url);
-
-    // Triple-check the value is correct
-    await page.waitForTimeout(500);
-    const enteredValue = await page.evaluate(() => {
-      const input = document.querySelector('input#site');
-      return input ? input.value : '';
-    });
-
-    if (enteredValue !== url) {
-      throw new Error(`URL mismatch! Expected: ${url}, Got: ${enteredValue}`);
+    // Type the URL one character at a time, verifying after each
+    for (let i = 0; i < url.length; i++) {
+      await page.type('input#site', url[i], { delay: 120 });
+      const currentValue = await page.$eval('input#site', el => el.value);
+      if (currentValue !== url.slice(0, i + 1)) {
+        throw new Error(`Typing error: expected '${url.slice(0, i + 1)}', got '${currentValue}'`);
+      }
     }
 
-    console.log('URL verified:', enteredValue);
+    // Blur the input to signal completion
+    await page.$eval('input#site', el => el.blur());
+
+    // Wait for the input to lose focus and value to be stable
+    await page.waitForFunction((expected) => {
+      const input = document.querySelector('input#site');
+      return input && input.value === expected && document.activeElement !== input;
+    }, { timeout: 10000 }, url);
+
+    // Final strict check
+    const enteredValue = await page.$eval('input#site', el => el.value);
+    if (enteredValue !== url) {
+      throw new Error(`Final URL mismatch! Expected: ${url}, Got: ${enteredValue}`);
+    }
 
     // Mark URL entry as complete
     await page.evaluate(() => {
       window.__urlEntryComplete = true;
     });
 
-    console.log('Waiting for captcha to be solved...');
-    
+    console.log('URL entry complete, waiting for captcha to be solved...');
+
     // Wait for captcha to be actually solved (check for response token)
     await page.waitForFunction(() => {
       const response = document.querySelector('#g-recaptcha-response');
       return response && response.value && response.value.length > 0;
     }, { timeout: 45000 });
 
-    console.log('Captcha appears to be solved, waiting additional time...');
-    await page.waitForTimeout(2000);
-
     // Final verification before submit
-    const finalUrl = await page.evaluate(() => {
-      const input = document.querySelector('input#site');
-      return input ? input.value : '';
-    });
-
+    const finalUrl = await page.$eval('input#site', el => el.value);
     if (finalUrl !== url) {
       throw new Error(`URL changed before submit! Expected: ${url}, Got: ${finalUrl}`);
     }
 
-    console.log('Submitting form...');
     await page.click('form.default_form button[type="submit"]');
     await page.waitForTimeout(5000);
     console.log('Submission complete for:', url);
