@@ -148,10 +148,26 @@ async function submitToCocCoc(browser, url) {
     // Now submit
     await page.click('form.default_form button[type="submit"]');
     await page.waitForTimeout(POST_SUBMIT_WAIT);
+
+    // Check for submission success (look for a success message or confirmation)
+    // You may need to adjust the selector/text below based on the actual page
+    const success = await page.evaluate(() => {
+      // Example: look for a success message element
+      const msg = document.querySelector('.alert-success, .success, .alert.alert-success');
+      if (msg && msg.innerText.match(/success|thành công|submitted|đã gửi/i)) return true;
+      // Or check for a specific confirmation element/text
+      return false;
+    });
+    if (!success) {
+      throw new Error('Submission did not show a success confirmation.');
+    }
+
     console.log('Submission complete for:', url);
 
+    return true;
   } catch (err) {
     console.error('Error in submitToCocCoc for URL:', url, err.message);
+    return false;
   } finally {
     await page.close();
   }
@@ -326,9 +342,9 @@ async function main() {
         while (!success && retryCount < MAX_RETRIES) {
           console.log('Submitting domain root:', rootUrl, retryCount > 0 ? `(retry ${retryCount})` : '', '| Proxy:', proxy);
           try {
-            await submitToCocCoc(browser, rootUrl);
-            success = true;
+            success = await submitToCocCoc(browser, rootUrl);
           } catch (err) {
+            success = false;
             const errMsg = (err && err.message) ? err.message : String(err);
             console.error('Submission failed for domain root:', rootUrl, errMsg);
             if (errMsg.includes('net::ERR_TIMED_OUT') || errMsg.includes('Navigation timeout') || errMsg.includes('net::ERR_PROXY_CONNECTION_FAILED') || errMsg.includes('net::ERR_CONNECTION_TIMED_OUT')) {
@@ -396,9 +412,9 @@ async function main() {
           while (!success && retryCount < MAX_RETRIES) {
             console.log('Submitting:', pageUrl, retryCount > 0 ? `(retry ${retryCount})` : '', '| Proxy:', proxy);
             try {
-              await submitToCocCoc(browser, pageUrl);
-              success = true;
+              success = await submitToCocCoc(browser, pageUrl);
             } catch (err) {
+              success = false;
               const errMsg = (err && err.message) ? err.message : String(err);
               console.error('Submission failed for:', pageUrl, errMsg);
               if (errMsg.includes('net::ERR_TIMED_OUT') || errMsg.includes('Navigation timeout') || errMsg.includes('net::ERR_PROXY_CONNECTION_FAILED') || errMsg.includes('net::ERR_CONNECTION_TIMED_OUT')) {
