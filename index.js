@@ -85,12 +85,24 @@ async function submitToCocCoc(browser, url) {
       if (input) input.value = '';
     });
 
-    // Type the URL one character at a time, verifying after each
+    // Type the URL one character at a time, verifying after each, with retry and focus
     for (let i = 0; i < url.length; i++) {
-      await page.type('input#site', url[i], { delay: 120 });
-      const currentValue = await page.$eval('input#site', el => el.value);
-      if (currentValue !== url.slice(0, i + 1)) {
-        throw new Error(`Typing error: expected '${url.slice(0, i + 1)}', got '${currentValue}'`);
+      let success = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        // Focus input before typing
+        await page.$eval('input#site', el => el.focus());
+        await page.type('input#site', url[i], { delay: 120 });
+        await page.waitForTimeout(30);
+        const currentValue = await page.$eval('input#site', el => el.value);
+        if (currentValue === url.slice(0, i + 1)) {
+          success = true;
+          break;
+        }
+        // If failed, try again after a short delay
+        await page.waitForTimeout(80);
+      }
+      if (!success) {
+        throw new Error(`Typing error: expected '${url.slice(0, i + 1)}', but could not achieve it after retries`);
       }
     }
 
