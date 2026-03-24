@@ -122,12 +122,37 @@ async function submitToCocCoc(browser, url) {
       return response && response.value && response.value.length > 0;
     }, { timeout: 45000 });
 
-    // Final verification before submit
-    const finalUrl = await page.$eval('input#site', el => el.value);
+    // Wait for a short period before submission to allow any last-moment changes
+    await page.waitForTimeout(1000);
+
+    // Confirm the URL is still correct before submitting
+    let finalUrl = await page.$eval('input#site', el => el.value);
     if (finalUrl !== url) {
-      throw new Error(`URL changed before submit! Expected: ${url}, Got: ${finalUrl}`);
+      console.warn(`URL incorrect before submit! Retrying entry. Expected: ${url}, Got: ${finalUrl}`);
+      // Clear and retype the URL
+      await page.evaluate(() => {
+        const input = document.querySelector('input#site');
+        if (input) input.value = '';
+      });
+      for (let i = 0; i < url.length; i++) {
+        await page.type('input#site', url[i], { delay: 120 });
+        const currentValue = await page.$eval('input#site', el => el.value);
+        if (currentValue !== url.slice(0, i + 1)) {
+          throw new Error(`Retry typing error: expected '${url.slice(0, i + 1)}', got '${currentValue}'`);
+        }
+      }
+      await page.$eval('input#site', el => el.blur());
+      await page.waitForFunction((expected) => {
+        const input = document.querySelector('input#site');
+        return input && input.value === expected && document.activeElement !== input;
+      }, { timeout: 10000 }, url);
+      finalUrl = await page.$eval('input#site', el => el.value);
+      if (finalUrl !== url) {
+        throw new Error(`Final retry URL mismatch! Expected: ${url}, Got: ${finalUrl}`);
+      }
     }
 
+    // Now submit
     await page.click('form.default_form button[type="submit"]');
     await page.waitForTimeout(5000);
     console.log('Submission complete for:', url);
