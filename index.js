@@ -1,9 +1,68 @@
+
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const xml2js = require('xml2js');
+
+
+// Proxy API integration
+
+// Load config.json
+let config = {};
+try {
+  config = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf-8'));
+} catch (e) {
+  config = {};
+}
+
+const PROXY_API_KEY = process.env.PROXY_API_KEY || config.PROXY_API_KEY || '';
+const PROXY_API_BASE = config.PROXY_API_BASE || 'http://proxy.shoplike.vn/Api';
+const CAPTCHA_TIMEOUT = config.CAPTCHA_TIMEOUT || 120000;
+const PAGE_LOAD_TIMEOUT = config.PAGE_LOAD_TIMEOUT || 60000;
+const FORM_SELECTOR_TIMEOUT = config.FORM_SELECTOR_TIMEOUT || 30000;
+const URL_TYPING_DELAY = config.URL_TYPING_DELAY || 120;
+const URL_TYPING_RETRIES = config.URL_TYPING_RETRIES || 3;
+const URL_TYPING_RETRY_DELAY = config.URL_TYPING_RETRY_DELAY || 80;
+const URL_TYPING_FOCUS_DELAY = config.URL_TYPING_FOCUS_DELAY || 30;
+const POST_SUBMIT_WAIT = config.POST_SUBMIT_WAIT || 5000;
+const BETWEEN_SUBMISSION_DELAY = config.BETWEEN_SUBMISSION_DELAY || 1000;
+
+async function orderNewProxy() {
+  if (!PROXY_API_KEY) throw new Error('PROXY_API_KEY not set in environment or config.json');
+  let waitTime = 0;
+  while (true) {
+    try {
+      const res = await axios.get(`${PROXY_API_BASE}/getNewProxy?access_token=${PROXY_API_KEY}`);
+      if (res.data.status === 'success') {
+        return res.data.data.proxy;
+      } else if (res.data.nextChange) {
+        waitTime = res.data.nextChange;
+        console.log(`Waiting ${waitTime}s for next proxy...`);
+        await new Promise(r => setTimeout(r, waitTime * 1000));
+      } else {
+        throw new Error(res.data.mess || 'Unknown proxy error');
+      }
+    } catch (err) {
+      throw new Error('Proxy order failed: ' + (err.message || err));
+    }
+  }
+}
+
+async function getCurrentProxy() {
+  if (!PROXY_API_KEY) throw new Error('PROXY_API_KEY not set in environment or config.json');
+  try {
+    const res = await axios.get(`${PROXY_API_BASE}/getCurrentProxy?access_token=${PROXY_API_KEY}`);
+    if (res.data.status === 'success') {
+      return res.data.data.proxy;
+    } else {
+      throw new Error(res.data.mess || 'No proxy available');
+    }
+  } catch (err) {
+    throw new Error('Get current proxy failed: ' + (err.message || err));
+  }
+}
 
 puppeteer.use(StealthPlugin());
 
@@ -56,11 +115,11 @@ async function submitToCocCoc(browser, url) {
   try {
     await page.goto('https://coccoc.com/search/console/en/get-your-website-on-coc-coc-search', {
       waitUntil: 'networkidle2',
-      timeout: 60000,
+      timeout: PAGE_LOAD_TIMEOUT,
     });
 
     console.log('Page loaded, waiting for form...');
-    await page.waitForSelector('input#site', { timeout: 30000 });
+    await page.waitForSelector('input#site', { timeout: FORM_SELECTOR_TIMEOUT });
     
     // CRITICAL: Prevent any premature form submission
     await page.evaluate(() => {
@@ -88,18 +147,18 @@ async function submitToCocCoc(browser, url) {
     // Type the URL one character at a time, verifying after each, with retry and focus
     for (let i = 0; i < url.length; i++) {
       let success = false;
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < URL_TYPING_RETRIES; attempt++) {
         // Focus input before typing
         await page.$eval('input#site', el => el.focus());
-        await page.type('input#site', url[i], { delay: 120 });
-        await page.waitForTimeout(30);
+        await page.type('input#site', url[i], { delay: URL_TYPING_DELAY });
+        await page.waitForTimeout(URL_TYPING_FOCUS_DELAY);
         const currentValue = await page.$eval('input#site', el => el.value);
         if (currentValue === url.slice(0, i + 1)) {
           success = true;
           break;
         }
         // If failed, try again after a short delay
-        await page.waitForTimeout(80);
+        await page.waitForTimeout(URL_TYPING_RETRY_DELAY);
       }
       if (!success) {
         throw new Error(`Typing error: expected '${url.slice(0, i + 1)}', but could not achieve it after retries`);
@@ -132,7 +191,7 @@ async function submitToCocCoc(browser, url) {
     await page.waitForFunction(() => {
       const response = document.querySelector('#g-recaptcha-response');
       return response && response.value && response.value.length > 0;
-    }, { timeout: 45000 });
+    }, { timeout: CAPTCHA_TIMEOUT });
 
     // Wait for a short period before submission to allow any last-moment changes
     await page.waitForTimeout(1000);
@@ -166,7 +225,7 @@ async function submitToCocCoc(browser, url) {
 
     // Now submit
     await page.click('form.default_form button[type="submit"]');
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(POST_SUBMIT_WAIT);
     console.log('Submission complete for:', url);
 
   } catch (err) {
@@ -197,6 +256,7 @@ function saveProgress(progressPath, progress) {
 
 
 
+
 (async () => {
   const args = process.argv.slice(2);
   const resetFlag = args.includes('--reset');
@@ -218,6 +278,17 @@ function saveProgress(progressPath, progress) {
   }
   const progress = loadProgress(progressPath);
 
+  // Proxy logic: order new proxy, then get current proxy
+  let proxy;
+  try {
+    await orderNewProxy();
+    proxy = await getCurrentProxy();
+    console.log('Using proxy:', proxy);
+  } catch (err) {
+    console.error('Proxy setup failed:', err.message || err);
+    process.exit(1);
+  }
+
   const extensionPath = path.join(__dirname, 'rektcaptcha');
   const browser = await puppeteer.launch({
     headless: false,
@@ -226,6 +297,7 @@ function saveProgress(progressPath, progress) {
       '--disable-setuid-sandbox',
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
+      `--proxy-server=${proxy}`,
     ],
   });
 
@@ -245,11 +317,19 @@ function saveProgress(progressPath, progress) {
           continue;
         }
         console.log('Submitting:', pageUrl);
-        await submitToCocCoc(browser, pageUrl);
-        progress.completed[domain].push(pageUrl);
-        saveProgress(progressPath, progress);
+        let success = false;
+        try {
+          await submitToCocCoc(browser, pageUrl);
+          success = true;
+        } catch (err) {
+          console.error('Submission failed for:', pageUrl, err.message || err);
+        }
+        if (success) {
+          progress.completed[domain].push(pageUrl);
+          saveProgress(progressPath, progress);
+        }
         // Add 1 second delay between each submission
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, BETWEEN_SUBMISSION_DELAY));
       }
     }
   }
