@@ -14,10 +14,10 @@ Cốc Cốc Auto Indexer is a Node.js automation tool that submits all URLs from
 
 ## Installation & Setup
 
+
 ### Prerequisites
 - Node.js (v16 or higher recommended)
 - npm (Node package manager)
-- Download the unpacked rektCaptcha Chrome extension and place it in a folder named `rektcaptcha` in the project root
 
 ### Installation
 1. Clone or download this repository to your local machine.
@@ -33,7 +33,7 @@ Cốc Cốc Auto Indexer is a Node.js automation tool that submits all URLs from
    https://example.com/
    https://anotherdomain.com/
    ```
-2. Ensure the `rektcaptcha` folder contains the unpacked rektCaptcha extension files.
+2. The `rektcaptcha` folder with the required extension files is already included in the source code. No need to download or unpack it separately.
 
 ## Usage
 

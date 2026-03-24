@@ -57,7 +57,18 @@ async function submitToCocCoc(browser, url) {
     waitUntil: 'networkidle2',
   });
   await page.waitForSelector('input#site');
-  await page.type('input#site', url);
+  // Clear the input field first
+  await page.evaluate(() => {
+    const input = document.querySelector('input#site');
+    if (input) input.value = '';
+  });
+  // Type the URL with a small delay between keystrokes
+  await page.type('input#site', url, { delay: 50 });
+  // Wait until the input value matches the full URL
+  await page.waitForFunction((expected) => {
+    const input = document.querySelector('input#site');
+    return input && input.value === expected;
+  }, {}, url);
   // Wait for rektCaptcha to solve the captcha (adjust timeout as needed)
   await page.waitForTimeout(15000);
   await page.click('form.default_form button[type="submit"]');
@@ -65,12 +76,35 @@ async function submitToCocCoc(browser, url) {
   await page.close();
 }
 
+function loadProgress(progressPath) {
+  try {
+    if (fs.existsSync(progressPath)) {
+      return JSON.parse(fs.readFileSync(progressPath, 'utf-8'));
+    }
+  } catch (err) {
+    console.error('Failed to read progress file:', err);
+  }
+  return { completed: {} };
+}
+
+function saveProgress(progressPath, progress) {
+  try {
+    fs.writeFileSync(progressPath, JSON.stringify(progress, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Failed to write progress file:', err);
+  }
+}
+
+
 (async () => {
   const domains = await getDomains(path.join(__dirname, 'domains.txt'));
   if (domains.length === 0) {
     console.error('No domains found in domains.txt');
     process.exit(1);
   }
+
+  const progressPath = path.join(__dirname, 'progress.json');
+  const progress = loadProgress(progressPath);
 
   const extensionPath = path.join(__dirname, 'rektcaptcha');
   const browser = await puppeteer.launch({
@@ -84,6 +118,7 @@ async function submitToCocCoc(browser, url) {
   });
 
   for (const domain of domains) {
+    if (!progress.completed[domain]) progress.completed[domain] = [];
     const sitemapIndexUrl = domain.replace(/\/$/, '') + '/sitemap_index.xml';
     const sitemapIndexXML = await fetchXML(sitemapIndexUrl);
     if (!sitemapIndexXML) continue;
@@ -93,8 +128,14 @@ async function submitToCocCoc(browser, url) {
       if (!sitemapXML) continue;
       const pageUrls = await parseSitemap(sitemapXML);
       for (const pageUrl of pageUrls) {
+        if (progress.completed[domain].includes(pageUrl)) {
+          console.log('Already submitted, skipping:', pageUrl);
+          continue;
+        }
         console.log('Submitting:', pageUrl);
         await submitToCocCoc(browser, pageUrl);
+        progress.completed[domain].push(pageUrl);
+        saveProgress(progressPath, progress);
         // Add 1 second delay between each submission
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
