@@ -58,23 +58,86 @@ async function submitToCocCoc(browser, url) {
       waitUntil: 'networkidle2',
       timeout: 60000,
     });
+
+    console.log('Page loaded, waiting for form...');
     await page.waitForSelector('input#site', { timeout: 30000 });
+    
+    // CRITICAL: Prevent any premature form submission
+    await page.evaluate(() => {
+      const form = document.querySelector('form.default_form');
+      if (form) {
+        // Block form submission until we're ready
+        form.addEventListener('submit', (e) => {
+          if (!window.__urlEntryComplete) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('Blocked premature form submission');
+          }
+        }, { capture: true });
+      }
+    });
+
+    console.log('Entering URL:', url);
     // Clear the input field first
     await page.evaluate(() => {
       const input = document.querySelector('input#site');
       if (input) input.value = '';
     });
+
     // Type the URL with a small delay between keystrokes
-    await page.type('input#site', url, { delay: 50 });
-    // Wait until the input value matches the full URL
+    await page.type('input#site', url, { delay: 100 });
+    
+    // Multiple checks to ensure URL is fully entered
+    console.log('Verifying URL entry...');
     await page.waitForFunction((expected) => {
       const input = document.querySelector('input#site');
       return input && input.value === expected;
     }, { timeout: 20000 }, url);
-    // Wait for rektCaptcha to solve the captcha (adjust timeout as needed)
-    await page.waitForTimeout(20000);
+
+    // Triple-check the value is correct
+    await page.waitForTimeout(500);
+    const enteredValue = await page.evaluate(() => {
+      const input = document.querySelector('input#site');
+      return input ? input.value : '';
+    });
+
+    if (enteredValue !== url) {
+      throw new Error(`URL mismatch! Expected: ${url}, Got: ${enteredValue}`);
+    }
+
+    console.log('URL verified:', enteredValue);
+
+    // Mark URL entry as complete
+    await page.evaluate(() => {
+      window.__urlEntryComplete = true;
+    });
+
+    console.log('Waiting for captcha to be solved...');
+    
+    // Wait for captcha to be actually solved (check for response token)
+    await page.waitForFunction(() => {
+      const response = document.querySelector('#g-recaptcha-response');
+      return response && response.value && response.value.length > 0;
+    }, { timeout: 45000 });
+
+    console.log('Captcha appears to be solved, waiting additional time...');
+    await page.waitForTimeout(2000);
+
+    // Final verification before submit
+    const finalUrl = await page.evaluate(() => {
+      const input = document.querySelector('input#site');
+      return input ? input.value : '';
+    });
+
+    if (finalUrl !== url) {
+      throw new Error(`URL changed before submit! Expected: ${url}, Got: ${finalUrl}`);
+    }
+
+    console.log('Submitting form...');
     await page.click('form.default_form button[type="submit"]');
     await page.waitForTimeout(5000);
+    console.log('Submission complete for:', url);
+
   } catch (err) {
     console.error('Error in submitToCocCoc for URL:', url, err.message);
   } finally {
