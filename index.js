@@ -53,27 +53,33 @@ async function parseSitemap(xml) {
 
 async function submitToCocCoc(browser, url) {
   const page = await browser.newPage();
-  await page.goto('https://coccoc.com/search/console/en/get-your-website-on-coc-coc-search', {
-    waitUntil: 'networkidle2',
-  });
-  await page.waitForSelector('input#site');
-  // Clear the input field first
-  await page.evaluate(() => {
-    const input = document.querySelector('input#site');
-    if (input) input.value = '';
-  });
-  // Type the URL with a small delay between keystrokes
-  await page.type('input#site', url, { delay: 50 });
-  // Wait until the input value matches the full URL
-  await page.waitForFunction((expected) => {
-    const input = document.querySelector('input#site');
-    return input && input.value === expected;
-  }, {}, url);
-  // Wait for rektCaptcha to solve the captcha (adjust timeout as needed)
-  await page.waitForTimeout(15000);
-  await page.click('form.default_form button[type="submit"]');
-  await page.waitForTimeout(5000);
-  await page.close();
+  try {
+    await page.goto('https://coccoc.com/search/console/en/get-your-website-on-coc-coc-search', {
+      waitUntil: 'networkidle2',
+      timeout: 60000,
+    });
+    await page.waitForSelector('input#site', { timeout: 30000 });
+    // Clear the input field first
+    await page.evaluate(() => {
+      const input = document.querySelector('input#site');
+      if (input) input.value = '';
+    });
+    // Type the URL with a small delay between keystrokes
+    await page.type('input#site', url, { delay: 50 });
+    // Wait until the input value matches the full URL
+    await page.waitForFunction((expected) => {
+      const input = document.querySelector('input#site');
+      return input && input.value === expected;
+    }, { timeout: 20000 }, url);
+    // Wait for rektCaptcha to solve the captcha (adjust timeout as needed)
+    await page.waitForTimeout(20000);
+    await page.click('form.default_form button[type="submit"]');
+    await page.waitForTimeout(5000);
+  } catch (err) {
+    console.error('Error in submitToCocCoc for URL:', url, err.message);
+  } finally {
+    await page.close();
+  }
 }
 
 function loadProgress(progressPath) {
@@ -96,7 +102,10 @@ function saveProgress(progressPath, progress) {
 }
 
 
+
 (async () => {
+  const args = process.argv.slice(2);
+  const resetFlag = args.includes('--reset');
   const domains = await getDomains(path.join(__dirname, 'domains.txt'));
   if (domains.length === 0) {
     console.error('No domains found in domains.txt');
@@ -104,6 +113,15 @@ function saveProgress(progressPath, progress) {
   }
 
   const progressPath = path.join(__dirname, 'progress.json');
+  if (resetFlag) {
+    // Clear progress.json
+    try {
+      fs.writeFileSync(progressPath, JSON.stringify({ completed: {} }, null, 2), 'utf-8');
+      console.log('Progress has been reset.');
+    } catch (err) {
+      console.error('Failed to reset progress file:', err);
+    }
+  }
   const progress = loadProgress(progressPath);
 
   const extensionPath = path.join(__dirname, 'rektcaptcha');
