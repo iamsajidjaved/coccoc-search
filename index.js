@@ -147,22 +147,22 @@ async function submitToCocCoc(browser, url) {
 
     // Now submit
     await page.click('form.default_form button[type="submit"]');
-    await page.waitForTimeout(POST_SUBMIT_WAIT);
 
-    // Check for submission success (look for a success message or confirmation)
-    // You may need to adjust the selector/text below based on the actual page
-    const success = await page.evaluate(() => {
-      // Example: look for a success message element
-      const msg = document.querySelector('.alert-success, .success, .alert.alert-success');
-      if (msg && msg.innerText.match(/success|thành công|submitted|đã gửi/i)) return true;
-      // Or check for a specific confirmation element/text
-      return false;
-    });
-    if (!success) {
-      throw new Error('Submission did not show a success confirmation.');
+    // Wait for the actual success modal/dialog (up to 10s)
+    try {
+      await page.waitForFunction(() => {
+        // Look for the modal/dialog with the success message
+        const modal = Array.from(document.querySelectorAll('div, .modal, .swal2-popup, .sweet-alert'))
+          .find(el => el.innerText && el.innerText.match(/Request has been sent/i));
+        return !!modal;
+      }, { timeout: 10000 });
+      console.log('Submission success modal detected for:', url);
+    } catch (e) {
+      throw new Error('Submission did not show the expected success modal (timeout waiting for message).');
     }
 
-    console.log('Submission complete for:', url);
+    // Wait briefly before closing/restarting
+    await page.waitForTimeout(2000);
 
     return true;
   } catch (err) {
