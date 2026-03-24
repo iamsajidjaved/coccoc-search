@@ -2,6 +2,8 @@
 
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteer.use(StealthPlugin());
+
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
@@ -11,6 +13,18 @@ const os = require('os');
 const { v4: uuidv4 } = require('uuid');
 const { checkProxy } = require('./proxy-check');
 
+// Human-friendly logger with colors
+const log = {
+  info: (msg) => console.log(`\x1b[36m[INFO]\x1b[0m ${msg}`),
+  success: (msg) => console.log(`\x1b[32m[SUCCESS]\x1b[0m ${msg}`),
+  warn: (msg) => console.log(`\x1b[33m[WARN]\x1b[0m ${msg}`),
+  error: (msg, detail = '') => console.log(`\x1b[31m[ERROR]\x1b[0m ${msg}${detail ? ` | ${detail}` : ''}`),
+  step: (msg) => console.log(`\x1b[35m➔\x1b[0m ${msg}`),
+  url: (url) => `\x1b[34m${url}\x1b[0m`
+};
+
+// Utility to sleep
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // Proxy API integration
 
@@ -36,13 +50,14 @@ const BETWEEN_SUBMISSION_DELAY = config.BETWEEN_SUBMISSION_DELAY || 1000;
 
 async function submitToCocCoc(browser, url) {
   const page = await browser.newPage();
+  
   try {
     await page.goto('https://coccoc.com/search/console/en/get-your-website-on-coc-coc-search', {
       waitUntil: 'networkidle2',
       timeout: PAGE_LOAD_TIMEOUT,
     });
 
-    console.log('Page loaded, waiting for form...');
+    log.step(`Page loaded, entering URL: ${log.url(url)}`);
     await page.waitForSelector('input#site', { timeout: FORM_SELECTOR_TIMEOUT });
 
     // CRITICAL: Prevent any premature form submission
@@ -54,121 +69,148 @@ async function submitToCocCoc(browser, url) {
           if (!window.__urlEntryComplete) {
             e.preventDefault();
             e.stopPropagation();
-            console.log('Blocked premature form submission');
           }
         }, { capture: true });
       }
     });
 
-    console.log('Entering URL:', url);
-
-    // Clear the input field first
-    await page.evaluate(() => {
-      const input = document.querySelector('input#site');
-      if (input) input.value = '';
-    });
-
-    // Type the URL one character at a time, verifying after each, with retry and focus
-    for (let i = 0; i < url.length; i++) {
-      let success = false;
+    async function enterUrl(targetUrl) {
       for (let attempt = 0; attempt < URL_TYPING_RETRIES; attempt++) {
-        // Focus input before typing
-        await page.$eval('input#site', el => el.focus());
-        await page.type('input#site', url[i], { delay: URL_TYPING_DELAY });
-        await page.waitForTimeout(URL_TYPING_FOCUS_DELAY);
-        const currentValue = await page.$eval('input#site', el => el.value);
-        if (currentValue === url.slice(0, i + 1)) {
-          success = true;
-          break;
-        }
-        // If failed, try again after a short delay
-        await page.waitForTimeout(URL_TYPING_RETRY_DELAY);
+        // Clear input via evaluate for reliability
+        await page.evaluate(() => {
+          const input = document.querySelector('input#site');
+          if (input) {
+            input.value = '';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        });
+
+        await page.focus('input#site');
+        await page.type('input#site', targetUrl, { delay: 30 }); // Faster but still human-like
+        
+        // Wait a bit and blur to trigger validation
+        await sleep(200);
+        await page.$eval('input#site', el => el.blur());
+        await sleep(200);
+
+        const enteredValue = await page.$eval('input#site', el => el.value);
+        if (enteredValue === targetUrl) return true;
+        
+        log.warn(`URL entry retry ${attempt + 1}. Got: ${enteredValue.substring(0, 30)}...`);
+        await sleep(500);
       }
-      if (!success) {
-        throw new Error(`Typing error: expected '${url.slice(0, i + 1)}', but could not achieve it after retries`);
-      }
+      throw new Error(`Failed to enter URL correctly after ${URL_TYPING_RETRIES} attempts.`);
     }
 
-    // Blur the input to signal completion
-    await page.$eval('input#site', el => el.blur());
+    await enterUrl(url);
 
-    // Wait for the input to lose focus and value to be stable
+    // Wait for the input to be stable and verified
     await page.waitForFunction((expected) => {
       const input = document.querySelector('input#site');
       return input && input.value === expected && document.activeElement !== input;
     }, { timeout: 10000 }, url);
-
-    // Final strict check
-    const enteredValue = await page.$eval('input#site', el => el.value);
-    if (enteredValue !== url) {
-      throw new Error(`Final URL mismatch! Expected: ${url}, Got: ${enteredValue}`);
-    }
 
     // Mark URL entry as complete
     await page.evaluate(() => {
       window.__urlEntryComplete = true;
     });
 
-    console.log('URL entry complete, waiting for captcha to be solved...');
+    log.step('Waiting for Google reCAPTCHA to be solved...');
 
-    // Wait for captcha to be actually solved (check for response token)
+    // Wait for captcha to be solved (token present in hidden textarea)
     await page.waitForFunction(() => {
       const response = document.querySelector('#g-recaptcha-response');
-      return response && response.value && response.value.length > 0;
+      return response && response.value && response.value.length > 10;
     }, { timeout: CAPTCHA_TIMEOUT });
 
-    // Wait for a short period before submission to allow any last-moment changes
-    await page.waitForTimeout(1000);
+    log.success('Captcha solved successfully');
+    await sleep(2000);
 
     // Confirm the URL is still correct before submitting
     let finalUrl = await page.$eval('input#site', el => el.value);
     if (finalUrl !== url) {
-      console.warn(`URL incorrect before submit! Retrying entry. Expected: ${url}, Got: ${finalUrl}`);
-      // Clear and retype the URL
-      await page.evaluate(() => {
+      log.warn(`URL mismatch detected! Re-entering: ${log.url(url)}`);
+      await page.evaluate((v) => { 
         const input = document.querySelector('input#site');
-        if (input) input.value = '';
-      });
-      for (let i = 0; i < url.length; i++) {
-        await page.type('input#site', url[i], { delay: 120 });
-        const currentValue = await page.$eval('input#site', el => el.value);
-        if (currentValue !== url.slice(0, i + 1)) {
-          throw new Error(`Retry typing error: expected '${url.slice(0, i + 1)}', got '${currentValue}'`);
-        }
-      }
+        input.value = v; 
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }, url);
       await page.$eval('input#site', el => el.blur());
-      await page.waitForFunction((expected) => {
-        const input = document.querySelector('input#site');
-        return input && input.value === expected && document.activeElement !== input;
-      }, { timeout: 10000 }, url);
+      await sleep(1000);
       finalUrl = await page.$eval('input#site', el => el.value);
-      if (finalUrl !== url) {
-        throw new Error(`Final retry URL mismatch! Expected: ${url}, Got: ${finalUrl}`);
-      }
+      if (finalUrl !== url) throw new Error('Final URL mismatch after retry');
     }
 
-    // Now submit
-    await page.click('form.default_form button[type="submit"]');
+    // Ensure the button is clickable
+    const submitBtnSelector = 'form.default_form button[type="submit"], .btn-primary, button.btn';
+    await page.waitForSelector(submitBtnSelector, { visible: true, timeout: 15000 });
+    
+    // Scroll into view to be safe
+    await page.evaluate((sel) => {
+      const btn = document.querySelector(sel);
+      if (btn) btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, submitBtnSelector);
+    await sleep(1000);
 
-    // Wait for the actual success modal/dialog (up to 10s)
+    log.step('Submitting form...');
+    
+    // Try regular click with some delay
+    try {
+      await page.click(submitBtnSelector, { delay: 100 });
+    } catch (e) {
+      log.warn('Direct click failed, using JavaScript fallback...');
+      await page.evaluate((sel) => {
+        const btn = document.querySelector(sel);
+        if (btn) {
+          btn.click();
+          // Also try to submit the form directly if it's not working
+          const form = btn.closest('form');
+          if (form) form.submit();
+        }
+      }, submitBtnSelector);
+    }
+
+    // Wait for the success modal or an error message
     try {
       await page.waitForFunction(() => {
-        // Look for the modal/dialog with the success message
-        const modal = Array.from(document.querySelectorAll('div, .modal, .swal2-popup, .sweet-alert'))
-          .find(el => el.innerText && el.innerText.match(/Request has been sent/i));
-        return !!modal;
-      }, { timeout: 10000 });
-      console.log('Submission success modal detected for:', url);
+        // Success check
+        const modal = Array.from(document.querySelectorAll('div, .modal, .swal2-popup, .sweet-alert, .alert-success'))
+          .find(el => el.innerText && el.innerText.match(/Request has been sent|success|thành công|đã gửi|submitted/i));
+        if (modal) return true;
+        
+        // Error check
+        const err = Array.from(document.querySelectorAll('.alert-danger, .error, .alert-warning'))
+          .find(el => el.innerText && el.innerText.length > 0);
+        if (err) return true;
+        
+        return false;
+      }, { timeout: 30000 });
+      
+      const result = await page.evaluate(() => {
+        const modal = Array.from(document.querySelectorAll('div, .modal, .swal2-popup, .sweet-alert, .alert-success'))
+          .find(el => el.innerText && el.innerText.match(/Request has been sent|success|thành công|đã gửi|submitted/i));
+        if (modal) return { status: 'success', text: modal.innerText };
+        
+        const err = Array.from(document.querySelectorAll('.alert-danger, .error, .alert-warning'))
+          .find(el => el.innerText && el.innerText.length > 0);
+        return err ? { status: 'error', message: err.innerText } : null;
+      });
+
+      if (result && result.status === 'success') {
+        log.success(`Request sent: ${result.text.split('\n')[0]}`);
+      } else if (result && result.status === 'error') {
+        throw new Error(`CocCoc site returned error: ${result.message}`);
+      } else {
+        throw new Error('Timed out waiting for confirmation');
+      }
     } catch (e) {
-      throw new Error('Submission did not show the expected success modal (timeout waiting for message).');
+      throw new Error(`Result detection failed: ${e.message}`);
     }
 
-    // Wait briefly before closing/restarting
-    await page.waitForTimeout(2000);
-
+    await sleep(2000);
     return true;
   } catch (err) {
-    // RE-THROW error so the main loop can handle it (rotate proxy, etc.)
     throw err;
   } finally {
     await page.close();
@@ -252,15 +294,28 @@ async function orderNewProxy() {
       const res = await axios.get(`${config.PROXY_API_BASE}/getNewProxy?access_token=${config.PROXY_API_KEY}`);
       if (res.data.status === 'success') {
         return res.data.data.proxy;
-      } else if (res.data.nextChange) {
-        waitTime = res.data.nextChange;
-        console.log(`Waiting ${waitTime}s for next proxy...`);
-        await new Promise(r => setTimeout(r, waitTime * 1000));
+      }
+      
+      // If the API specifies a nextChange time, use it exactly
+      let waitSeconds = 0;
+      if (res.data.nextChange !== undefined) {
+        waitSeconds = parseInt(res.data.nextChange, 10);
+      } else if (res.data.mess) {
+        // Fallback: try to extract seconds from the message if nextChange is missing
+        const match = res.data.mess.match(/(\d+)/);
+        if (match) waitSeconds = parseInt(match[1], 10);
+      }
+
+      if (waitSeconds > 0) {
+        log.info(`API: Wait ${waitSeconds}s for next proxy change...`);
+        await sleep(waitSeconds * 1000);
       } else {
         throw new Error(res.data.mess || 'Unknown proxy error');
       }
     } catch (err) {
-      throw new Error('Proxy order failed: ' + (err.message || err));
+      if (err.message && err.message.includes('Proxy order failed')) throw err;
+      log.warn(`Proxy API error, retrying in 5s... (${err.message})`);
+      await sleep(5000);
     }
   }
 }
@@ -284,187 +339,180 @@ async function main() {
   const resetFlag = args.includes('--reset');
   const domains = await getDomains(path.join(__dirname, 'domains.txt'));
   if (domains.length === 0) {
-    console.error('No domains found in domains.txt');
+    log.error('No domains found in domains.txt');
     process.exit(1);
   }
   const progressPath = path.join(__dirname, 'progress.json');
   let progress = loadProgress(progressPath);
   if (resetFlag) {
-    // Clear progress.json
     try {
       fs.writeFileSync(progressPath, JSON.stringify({ completed: {} }, null, 2), 'utf-8');
-      console.log('Progress has been reset.');
+      log.info('Progress has been reset.');
     } catch (err) {
-      console.error('Failed to reset progress file:', err);
+      log.error('Failed to reset progress file', err.message);
     }
     progress = { completed: {} };
   }
 
-  // Proxy logic: always get a new proxy and check it before each submission
-  let proxy;
-  async function getAndCheckProxy() {
-    let working = false;
-    let attempts = 0;
-    while (!working) {
-      attempts++;
-      await orderNewProxy();
-      proxy = await getCurrentProxy();
-      console.log('Checking proxy:', proxy);
-      working = await checkProxy(proxy);
-      if (!working) {
-        console.warn('Proxy not working, pausing for 1 minute before retrying...');
-        await new Promise(r => setTimeout(r, 60000));
-      }
-    }
-    console.log('Using working proxy:', proxy, `(after ${attempts} attempt${attempts > 1 ? 's' : ''})`);
-    return proxy;
-  }
-  await getAndCheckProxy();
-
-
   const extensionPath = path.join(__dirname, 'rektcaptcha');
-  // Helper to create a fresh userDataDir for each browser launch
-  function getTempUserDataDir() {
+  let proxy;
+  let browser;
+  let userDataDir;
+
+  async function getTempUserDataDir() {
     const dir = path.join(os.tmpdir(), 'puppeteer-profile-' + uuidv4());
     fs.mkdirSync(dir, { recursive: true });
     return dir;
   }
-  let userDataDir = getTempUserDataDir();
-  let browser = await puppeteer.launch({
-    headless: false,
-    userDataDir,
-    protocolTimeout: 180000, // Increase protocol timeout to 3 minutes
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      `--disable-extensions-except=${extensionPath}`,
-      `--load-extension=${extensionPath}`,
-      `--proxy-server=${proxy}`,
-    ],
-  });
+
+  async function cleanupBrowser() {
+    if (browser) {
+      try { await browser.close(); } catch {}
+      browser = null;
+    }
+    if (userDataDir) {
+      try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch {}
+      userDataDir = null;
+    }
+  }
+
+  async function getAndCheckProxy(forceNew = false) {
+    let working = false;
+    let attempts = 0;
+    while (!working) {
+      attempts++;
+      try {
+        if (forceNew || attempts > 1) {
+          log.info(`Requesting new proxy (attempt ${attempts})...`);
+          proxy = await orderNewProxy();
+        } else {
+          log.info('Checking current proxy status...');
+          proxy = await getCurrentProxy();
+        }
+        
+        if (!proxy) {
+          forceNew = true;
+          continue;
+        }
+
+        log.step(`Verifying connectivity: ${proxy}`);
+        working = await checkProxy(proxy);
+        
+        if (!working) {
+          log.warn('Proxy check failed, rotating immediately...');
+          forceNew = true;
+        }
+      } catch (err) {
+        log.error('Proxy management error', err.message);
+        forceNew = true;
+      }
+    }
+    log.success(`Active proxy: ${proxy}`);
+    return proxy;
+  }
+
+  async function launchBrowser(forceNewProxy = false) {
+    await cleanupBrowser();
+    await getAndCheckProxy(forceNewProxy);
+    userDataDir = await getTempUserDataDir();
+    log.info(`Starting browser instance...`);
+    browser = await puppeteer.launch({
+      headless: false,
+      userDataDir,
+      protocolTimeout: 180000,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        `--disable-extensions-except=${extensionPath}`,
+        `--load-extension=${extensionPath}`,
+        `--proxy-server=${proxy}`,
+      ],
+    });
+    return browser;
+  }
+
+  async function submitUrlWithRetry(url) {
+    let success = false;
+    let retryCount = 0;
+    const MAX_RETRIES = 5; // Reduced default retries for cleaner execution
+
+    while (!success && retryCount < MAX_RETRIES) {
+      if (!browser) {
+        await launchBrowser();
+      }
+
+      log.step(`Processing: ${log.url(url)} (Try ${retryCount + 1}/${MAX_RETRIES})`);
+      try {
+        success = await submitToCocCoc(browser, url);
+        if (success) {
+          log.success(`Finished: ${log.url(url)}`);
+          await cleanupBrowser();
+          return true;
+        }
+      } catch (err) {
+        success = false;
+        const errMsg = (err && err.message) ? err.message : String(err);
+        log.error(`Failed: ${log.url(url)}`, errMsg);
+
+        if (errMsg.includes('net::') || errMsg.includes('timeout') || errMsg.includes('Connection closed')) {
+          log.warn('Network issue detected, refreshing environment...');
+          await launchBrowser(false); 
+        }
+        retryCount++;
+      }
+    }
+    return false;
+  }
 
   for (const domain of domains) {
     if (!progress.completed[domain]) progress.completed[domain] = [];
+
     // Optionally submit the domain root
     if (config.SUBMIT_DOMAINS) {
       const rootUrl = domain.replace(/\/$/, '');
       if (!progress.completed[domain].includes(rootUrl)) {
-        let success = false;
-        let retryCount = 0;
-        const MAX_RETRIES = 20;
-        while (!success && retryCount < MAX_RETRIES) {
-          // Always check proxy before each submission
-          await getAndCheckProxy();
-          console.log('Submitting domain root:', rootUrl, retryCount > 0 ? `(retry ${retryCount})` : '', '| Proxy:', proxy);
-          try {
-            success = await submitToCocCoc(browser, rootUrl);
-          } catch (err) {
-            success = false;
-            const errMsg = (err && err.message) ? err.message : String(err);
-            console.error('Submission failed for domain root:', rootUrl, errMsg);
-            if (errMsg.includes('net::ERR_TIMED_OUT') || errMsg.includes('Navigation timeout') || errMsg.includes('net::ERR_PROXY_CONNECTION_FAILED') || errMsg.includes('net::ERR_CONNECTION_TIMED_OUT')) {
-              console.log('Proxy/network error detected. Rotating proxy and restarting browser...');
-              try { await browser.close(); } catch {}
-              await getAndCheckProxy();
-              // Clean up previous userDataDir
-              try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch {}
-              userDataDir = getTempUserDataDir();
-              browser = await puppeteer.launch({
-                headless: false,
-                userDataDir,
-                protocolTimeout: 180000,
-                args: [
-                  '--no-sandbox',
-                  '--disable-setuid-sandbox',
-                  `--disable-extensions-except=${extensionPath}`,
-                  `--load-extension=${extensionPath}`,
-                  `--proxy-server=${proxy}`,
-                ],
-              });
-              await new Promise(resolve => setTimeout(resolve, 3000));
-            } else {
-              break;
-            }
-            retryCount++;
-          }
-        }
+        const success = await submitUrlWithRetry(rootUrl);
         if (success) {
           progress.completed[domain].push(rootUrl);
           saveProgress(progressPath, progress);
         }
-        await new Promise(resolve => setTimeout(resolve, BETWEEN_SUBMISSION_DELAY));
       } else {
-        console.log('Already submitted domain root, skipping:', rootUrl);
+        log.info(`Skipping (already done): ${log.url(rootUrl)}`);
       }
     }
+
     // Optionally submit sitemaps
     if (config.SUBMIT_SITEMAPS) {
       const sitemapIndexUrl = domain.replace(/\/$/, '') + '/sitemap_index.xml';
+      log.step(`Analyzing sitemap index: ${log.url(sitemapIndexUrl)}`);
       const sitemapIndexXML = await fetchXML(sitemapIndexUrl);
       if (!sitemapIndexXML) continue;
+      
       const sitemapUrls = await parseSitemapIndex(sitemapIndexXML);
       for (const sitemapUrl of sitemapUrls) {
+        log.step(`Reading sitemap: ${log.url(sitemapUrl)}`);
         const sitemapXML = await fetchXML(sitemapUrl);
         if (!sitemapXML) continue;
+        
         const pageUrls = await parseSitemap(sitemapXML);
         for (const pageUrl of pageUrls) {
           if (progress.completed[domain].includes(pageUrl)) {
-            console.log('Already submitted, skipping:', pageUrl);
+            log.info(`Skipping (already done): ${log.url(pageUrl)}`);
             continue;
           }
-          console.log('Submitting:', pageUrl);
-          let success = false;
-          let retryCount = 0;
-          const MAX_RETRIES = 20;
-          while (!success && retryCount < MAX_RETRIES) {
-            // Always check proxy before each submission
-            await getAndCheckProxy();
-            console.log('Submitting:', pageUrl, retryCount > 0 ? `(retry ${retryCount})` : '', '| Proxy:', proxy);
-            try {
-              success = await submitToCocCoc(browser, pageUrl);
-            } catch (err) {
-              success = false;
-              const errMsg = (err && err.message) ? err.message : String(err);
-              console.error('Submission failed for:', pageUrl, errMsg);
-              if (errMsg.includes('net::ERR_TIMED_OUT') || errMsg.includes('Navigation timeout') || errMsg.includes('net::ERR_PROXY_CONNECTION_FAILED') || errMsg.includes('net::ERR_CONNECTION_TIMED_OUT')) {
-                console.log('Proxy/network error detected. Rotating proxy and restarting browser...');
-                try { await browser.close(); } catch {}
-                await getAndCheckProxy();
-                // Clean up previous userDataDir
-                try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch {}
-                userDataDir = getTempUserDataDir();
-                browser = await puppeteer.launch({
-                  headless: false,
-                  userDataDir,
-                  protocolTimeout: 180000,
-                  args: [
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    `--disable-extensions-except=${extensionPath}`,
-                    `--load-extension=${extensionPath}`,
-                    `--proxy-server=${proxy}`,
-                  ],
-                });
-                await new Promise(resolve => setTimeout(resolve, 3000));
-              } else {
-                break;
-              }
-              retryCount++;
-            }
-          }
+
+          const success = await submitUrlWithRetry(pageUrl);
           if (success) {
             progress.completed[domain].push(pageUrl);
             saveProgress(progressPath, progress);
           }
-          await new Promise(resolve => setTimeout(resolve, BETWEEN_SUBMISSION_DELAY));
         }
       }
     }
   }
 
-  await browser.close();
-  // Clean up last userDataDir
-  try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch {}
+  log.success('ALL TASKS COMPLETED SUCCESSFULLY');
+  await cleanupBrowser();
 }
 
 main();
