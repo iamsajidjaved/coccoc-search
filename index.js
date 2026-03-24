@@ -165,9 +165,32 @@ function getDomains(filePath) {
   }
 }
 
+function getRandomUserAgent() {
+  if (Array.isArray(config.USER_AGENTS) && config.USER_AGENTS.length > 0) {
+    return config.USER_AGENTS[Math.floor(Math.random() * config.USER_AGENTS.length)];
+  }
+  // fallback
+  return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+}
+
 async function fetchXML(url) {
   try {
-    const res = await axios.get(url, { timeout: 15000 });
+    const userAgent = getRandomUserAgent();
+    const headers = {
+      'User-Agent': userAgent,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+      'DNT': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1'
+    };
+    const res = await axios.get(url, { timeout: 15000, headers });
     return res.data;
   } catch (err) {
     console.error('Failed to fetch:', url, err.message);
@@ -281,44 +304,30 @@ async function main() {
 
   for (const domain of domains) {
     if (!progress.completed[domain]) progress.completed[domain] = [];
-    const sitemapIndexUrl = domain.replace(/\/$/, '') + '/sitemap_index.xml';
-    const sitemapIndexXML = await fetchXML(sitemapIndexUrl);
-    if (!sitemapIndexXML) continue;
-    const sitemapUrls = await parseSitemapIndex(sitemapIndexXML);
-    for (const sitemapUrl of sitemapUrls) {
-      const sitemapXML = await fetchXML(sitemapUrl);
-      if (!sitemapXML) continue;
-      const pageUrls = await parseSitemap(sitemapXML);
-      for (const pageUrl of pageUrls) {
-        if (progress.completed[domain].includes(pageUrl)) {
-          console.log('Already submitted, skipping:', pageUrl);
-          continue;
-        }
-        console.log('Submitting:', pageUrl);
+    // Optionally submit the domain root
+    if (config.SUBMIT_DOMAINS) {
+      const rootUrl = domain.replace(/\/$/, '');
+      if (!progress.completed[domain].includes(rootUrl)) {
         let success = false;
         let retryCount = 0;
         const MAX_RETRIES = 20;
         while (!success && retryCount < MAX_RETRIES) {
-          console.log('Submitting:', pageUrl, retryCount > 0 ? `(retry ${retryCount})` : '', '| Proxy:', proxy);
+          console.log('Submitting domain root:', rootUrl, retryCount > 0 ? `(retry ${retryCount})` : '', '| Proxy:', proxy);
           try {
-            await submitToCocCoc(browser, pageUrl);
+            await submitToCocCoc(browser, rootUrl);
             success = true;
           } catch (err) {
             const errMsg = (err && err.message) ? err.message : String(err);
-            console.error('Submission failed for:', pageUrl, errMsg);
-            // If navigation/network error, rotate proxy and restart browser
+            console.error('Submission failed for domain root:', rootUrl, errMsg);
             if (errMsg.includes('net::ERR_TIMED_OUT') || errMsg.includes('Navigation timeout') || errMsg.includes('net::ERR_PROXY_CONNECTION_FAILED') || errMsg.includes('net::ERR_CONNECTION_TIMED_OUT')) {
               console.log('Proxy/network error detected. Rotating proxy and restarting browser...');
-              try {
-                await browser.close();
-              } catch {}
+              try { await browser.close(); } catch {}
               try {
                 await orderNewProxy();
                 proxy = await getCurrentProxy();
                 console.log('Using new proxy:', proxy);
               } catch (proxyErr) {
                 console.error('Proxy rotation failed:', proxyErr.message || proxyErr);
-                // Wait before next retry to avoid hammering the proxy API
                 await new Promise(resolve => setTimeout(resolve, 5000));
                 retryCount++;
                 continue;
@@ -333,20 +342,85 @@ async function main() {
                   `--proxy-server=${proxy}`,
                 ],
               });
-              // Wait before next retry to avoid hammering the proxy API
               await new Promise(resolve => setTimeout(resolve, 3000));
             } else {
-              // For other errors, do not retry
               break;
             }
             retryCount++;
           }
         }
         if (success) {
-          progress.completed[domain].push(pageUrl);
+          progress.completed[domain].push(rootUrl);
           saveProgress(progressPath, progress);
         }
         await new Promise(resolve => setTimeout(resolve, BETWEEN_SUBMISSION_DELAY));
+      } else {
+        console.log('Already submitted domain root, skipping:', rootUrl);
+      }
+    }
+    // Optionally submit sitemaps
+    if (config.SUBMIT_SITEMAPS) {
+      const sitemapIndexUrl = domain.replace(/\/$/, '') + '/sitemap_index.xml';
+      const sitemapIndexXML = await fetchXML(sitemapIndexUrl);
+      if (!sitemapIndexXML) continue;
+      const sitemapUrls = await parseSitemapIndex(sitemapIndexXML);
+      for (const sitemapUrl of sitemapUrls) {
+        const sitemapXML = await fetchXML(sitemapUrl);
+        if (!sitemapXML) continue;
+        const pageUrls = await parseSitemap(sitemapXML);
+        for (const pageUrl of pageUrls) {
+          if (progress.completed[domain].includes(pageUrl)) {
+            console.log('Already submitted, skipping:', pageUrl);
+            continue;
+          }
+          console.log('Submitting:', pageUrl);
+          let success = false;
+          let retryCount = 0;
+          const MAX_RETRIES = 20;
+          while (!success && retryCount < MAX_RETRIES) {
+            console.log('Submitting:', pageUrl, retryCount > 0 ? `(retry ${retryCount})` : '', '| Proxy:', proxy);
+            try {
+              await submitToCocCoc(browser, pageUrl);
+              success = true;
+            } catch (err) {
+              const errMsg = (err && err.message) ? err.message : String(err);
+              console.error('Submission failed for:', pageUrl, errMsg);
+              if (errMsg.includes('net::ERR_TIMED_OUT') || errMsg.includes('Navigation timeout') || errMsg.includes('net::ERR_PROXY_CONNECTION_FAILED') || errMsg.includes('net::ERR_CONNECTION_TIMED_OUT')) {
+                console.log('Proxy/network error detected. Rotating proxy and restarting browser...');
+                try { await browser.close(); } catch {}
+                try {
+                  await orderNewProxy();
+                  proxy = await getCurrentProxy();
+                  console.log('Using new proxy:', proxy);
+                } catch (proxyErr) {
+                  console.error('Proxy rotation failed:', proxyErr.message || proxyErr);
+                  await new Promise(resolve => setTimeout(resolve, 5000));
+                  retryCount++;
+                  continue;
+                }
+                browser = await puppeteer.launch({
+                  headless: false,
+                  args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    `--disable-extensions-except=${extensionPath}`,
+                    `--load-extension=${extensionPath}`,
+                    `--proxy-server=${proxy}`,
+                  ],
+                });
+                await new Promise(resolve => setTimeout(resolve, 3000));
+              } else {
+                break;
+              }
+              retryCount++;
+            }
+          }
+          if (success) {
+            progress.completed[domain].push(pageUrl);
+            saveProgress(progressPath, progress);
+          }
+          await new Promise(resolve => setTimeout(resolve, BETWEEN_SUBMISSION_DELAY));
+        }
       }
     }
   }
