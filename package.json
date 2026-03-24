@@ -1,0 +1,16 @@
+{
+  "name": "coccoc-search-stealth",
+  "version": "1.0.0",
+  "description": "Puppeteer script using stealth mode to open CocCoc Search Console page.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.13.6",
+    "puppeteer": "^21.3.8",
+    "puppeteer-extra": "3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.1",
+    "xml2js": "^0.6.2"
+  }
+}
