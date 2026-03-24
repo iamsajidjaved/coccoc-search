@@ -95,6 +95,8 @@ async function submitToCocCoc(browser, url) {
       for (const pageUrl of pageUrls) {
         console.log('Submitting:', pageUrl);
         await submitToCocCoc(browser, pageUrl);
+        // Add 1 second delay between each submission
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
   }
