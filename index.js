@@ -7,7 +7,9 @@ const path = require('path');
 const axios = require('axios');
 const xml2js = require('xml2js');
 const os = require('os');
+
 const { v4: uuidv4 } = require('uuid');
+const { checkProxy } = require('./proxy-check');
 
 
 // Proxy API integration
@@ -166,8 +168,8 @@ async function submitToCocCoc(browser, url) {
 
     return true;
   } catch (err) {
-    console.error('Error in submitToCocCoc for URL:', url, err.message);
-    return false;
+    // RE-THROW error so the main loop can handle it (rotate proxy, etc.)
+    throw err;
   } finally {
     await page.close();
   }
@@ -298,16 +300,26 @@ async function main() {
     progress = { completed: {} };
   }
 
-  // Proxy logic: order new proxy, then get current proxy
+  // Proxy logic: always get a new proxy and check it before each submission
   let proxy;
-  try {
-    await orderNewProxy();
-    proxy = await getCurrentProxy();
-    console.log('Using proxy:', proxy);
-  } catch (err) {
-    console.error('Proxy setup failed:', err.message || err);
-    process.exit(1);
+  async function getAndCheckProxy() {
+    let working = false;
+    let attempts = 0;
+    while (!working) {
+      attempts++;
+      await orderNewProxy();
+      proxy = await getCurrentProxy();
+      console.log('Checking proxy:', proxy);
+      working = await checkProxy(proxy);
+      if (!working) {
+        console.warn('Proxy not working, pausing for 1 minute before retrying...');
+        await new Promise(r => setTimeout(r, 60000));
+      }
+    }
+    console.log('Using working proxy:', proxy, `(after ${attempts} attempt${attempts > 1 ? 's' : ''})`);
+    return proxy;
   }
+  await getAndCheckProxy();
 
 
   const extensionPath = path.join(__dirname, 'rektcaptcha');
@@ -321,6 +333,7 @@ async function main() {
   let browser = await puppeteer.launch({
     headless: false,
     userDataDir,
+    protocolTimeout: 180000, // Increase protocol timeout to 3 minutes
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -340,6 +353,8 @@ async function main() {
         let retryCount = 0;
         const MAX_RETRIES = 20;
         while (!success && retryCount < MAX_RETRIES) {
+          // Always check proxy before each submission
+          await getAndCheckProxy();
           console.log('Submitting domain root:', rootUrl, retryCount > 0 ? `(retry ${retryCount})` : '', '| Proxy:', proxy);
           try {
             success = await submitToCocCoc(browser, rootUrl);
@@ -350,22 +365,14 @@ async function main() {
             if (errMsg.includes('net::ERR_TIMED_OUT') || errMsg.includes('Navigation timeout') || errMsg.includes('net::ERR_PROXY_CONNECTION_FAILED') || errMsg.includes('net::ERR_CONNECTION_TIMED_OUT')) {
               console.log('Proxy/network error detected. Rotating proxy and restarting browser...');
               try { await browser.close(); } catch {}
-              try {
-                await orderNewProxy();
-                proxy = await getCurrentProxy();
-                console.log('Using new proxy:', proxy);
-              } catch (proxyErr) {
-                console.error('Proxy rotation failed:', proxyErr.message || proxyErr);
-                await new Promise(resolve => setTimeout(resolve, 5000));
-                retryCount++;
-                continue;
-              }
+              await getAndCheckProxy();
               // Clean up previous userDataDir
               try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch {}
               userDataDir = getTempUserDataDir();
               browser = await puppeteer.launch({
                 headless: false,
                 userDataDir,
+                protocolTimeout: 180000,
                 args: [
                   '--no-sandbox',
                   '--disable-setuid-sandbox',
@@ -410,6 +417,8 @@ async function main() {
           let retryCount = 0;
           const MAX_RETRIES = 20;
           while (!success && retryCount < MAX_RETRIES) {
+            // Always check proxy before each submission
+            await getAndCheckProxy();
             console.log('Submitting:', pageUrl, retryCount > 0 ? `(retry ${retryCount})` : '', '| Proxy:', proxy);
             try {
               success = await submitToCocCoc(browser, pageUrl);
@@ -420,22 +429,14 @@ async function main() {
               if (errMsg.includes('net::ERR_TIMED_OUT') || errMsg.includes('Navigation timeout') || errMsg.includes('net::ERR_PROXY_CONNECTION_FAILED') || errMsg.includes('net::ERR_CONNECTION_TIMED_OUT')) {
                 console.log('Proxy/network error detected. Rotating proxy and restarting browser...');
                 try { await browser.close(); } catch {}
-                try {
-                  await orderNewProxy();
-                  proxy = await getCurrentProxy();
-                  console.log('Using new proxy:', proxy);
-                } catch (proxyErr) {
-                  console.error('Proxy rotation failed:', proxyErr.message || proxyErr);
-                  await new Promise(resolve => setTimeout(resolve, 5000));
-                  retryCount++;
-                  continue;
-                }
+                await getAndCheckProxy();
                 // Clean up previous userDataDir
                 try { fs.rmSync(userDataDir, { recursive: true, force: true }); } catch {}
                 userDataDir = getTempUserDataDir();
                 browser = await puppeteer.launch({
                   headless: false,
                   userDataDir,
+                  protocolTimeout: 180000,
                   args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
