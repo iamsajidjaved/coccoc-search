@@ -1,70 +1,91 @@
-# Cốc Cốc Auto Indexer
+# 🚀 Cốc Cốc Auto Indexer
 
-## Introduction
+A powerful Node.js automation tool designed to submit website URLs to the **Cốc Cốc Search Console** for faster indexing. Built with Puppeteer Stealth and rektCaptcha for seamless bypass of bot detection.
 
-Cốc Cốc Auto Indexer is a Node.js automation tool that submits all URLs from your website's sitemaps to the Cốc Cốc Search Console. It uses Puppeteer in stealth mode and the rektCaptcha Chrome extension to bypass bot detection and solve reCAPTCHA challenges automatically. This tool is ideal for webmasters who want to ensure all their site pages are indexed by Cốc Cốc efficiently.
+---
 
-## Features
-- Loops through all domains listed in `domains.txt`
-- Fetches and parses all sitemaps (including nested sitemaps) for each domain
-- Extracts all URLs (pages, posts, etc.) from the sitemaps
-- Submits each URL to the Cốc Cốc Search Console form
-- Uses the rektCaptcha Chrome extension to solve captchas automatically
-- Fully automated, hands-free operation
+## ✨ Features
 
-## Installation & Setup
+- **Multi-Domain Support**: Processes all domains listed in `domains.txt`.
+- **Sitemap Extraction**: Automatically fetches and parses nested sitemaps to find every URL on your site.
+- **Smart Proxy Integration**: 
+    - Reuses working proxies to maximize efficiency.
+    - Automatically rotates and requests new proxies when network issues occur.
+    - Uses exact wait times provided by the proxy API.
+- **Optimized Submission Flow**:
+    - Fast URL entry (30ms/char) with robust verification.
+    - Automated success detection matching the "Request has been sent" message.
+    - Fresh browser instance for every URL to maintain a clean state.
+- **Robust Error Handling**: 
+    - Skips broken domains or sitemaps without stopping the script.
+    - Infinite retry logic for proxy connectivity.
+- **Human-Friendly Logging**: Beautifully colored terminal output for real-time monitoring.
 
+---
 
-### Prerequisites
-- Node.js (v16 or higher recommended)
-- npm (Node package manager)
+## 🛠️ Installation & Setup
 
-### Installation
-1. Clone or download this repository to your local machine.
-2. Open a terminal in the project directory.
-3. Install dependencies:
-   ```sh
+### 📋 Prerequisites
+- **Node.js**: v18.0 or higher.
+- **NPM**: Included with Node.js.
+
+### 📥 Step 1: Installation
+1. Clone the repository and navigate to the folder.
+2. Install the required packages:
+   ```powershell
    npm install
    ```
 
-### Setup
-1. Add your website domains (one per line) to a file named `domains.txt` in the project root. Example:
-   ```
+### ⚙️ Step 2: Configuration
+1. **`domains.txt`**: Add your website domains (one per line).
+   ```text
    https://example.com/
-   https://anotherdomain.com/
+   https://another-site.net/
    ```
-2. The `rektcaptcha` folder with the required extension files is already included in the source code. No need to download or unpack it separately.
+2. **`config.json`**: Enter your Proxy API details and customize behavior.
+   ```json
+   {
+     "PROXY_API_KEY": "YOUR_KEY_HERE",
+     "PROXY_API_BASE": "http://proxy.shoplike.vn/Api",
+     "SUBMIT_DOMAINS": true,
+     "SUBMIT_SITEMAPS": true
+   }
+   ```
 
-## Usage
+---
 
-Run the script with:
-```sh
+## 🚀 Usage
+
+Start the indexing process:
+```powershell
 npm start
 ```
 
-- The script will loop through each domain in `domains.txt`, fetch all sitemaps, extract all URLs, and submit them to the Cốc Cốc Search Console.
-- The browser will open for each submission, fill the form, solve the captcha, and submit the URL automatically.
+To reset your progress and re-index everything:
+```powershell
+npm start -- --reset
+```
 
-## Notes
-- The script waits for the rektCaptcha extension to solve the captcha before submitting each URL. Adjust the wait time in `index.js` if needed.
-- Make sure the rektCaptcha extension is up to date and functional.
-- This tool is for educational and webmaster automation purposes only. Use responsibly.
+### 🧠 How it works:
+1. **Init**: Reads domains and loads progress from `progress.json`.
+2. **Proxy**: Verifies the current proxy can reach `coccoc.com`.
+3. **Loop**: For every URL found in your sitemaps:
+   - Launches a fresh stealth browser.
+   - Types the URL and waits for the Captcha to be solved.
+   - Clicks submit and waits for the confirmation message.
+   - Closes the browser and marks the URL as completed.
 
-## License
+---
+
+## 🛡️ Robustness Notes
+- **Never Breaks**: If a domain or sitemap fails, the script logs the issue and moves to the next one automatically.
+- **Connection Issues**: If the internet or proxy goes down, the script will wait and retry until a connection is restored.
+- **Educational Use**: This tool is for webmaster automation and educational purposes. Use responsibly.
+
+---
+
+## 👤 Author
+**Telegram**: [@iamsajidjaved](https://t.me/iamsajidjaved)
+
+---
 MIT License
-## Running with pm2 (auto-restart & crash-resume)
-
-To keep the process running and automatically resume from the last progress if it crashes or your server restarts, use [pm2](https://pm2.keymetrics.io/):
-
-1. Install pm2 globally (if not already):
-   ```sh
-   npm install -g pm2
-   ```
-2. Start the script with pm2:
-   ```sh
-   pm2 start index.js --name coccoc-bot
-   ```
-3. pm2 will restart the process if it crashes or exits unexpectedly. The script will resume from the last saved point in `progress.json`.
-
-## Author
-Telegram: @iamsajidjaved
