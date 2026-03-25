@@ -193,7 +193,13 @@ async function submitToCocCoc(browser, url) {
       });
 
       if (result && result.status === 'success') {
-        log.success(`Request sent: ${result.text.split('\n')[0]}`);
+        // Filter out "English" or other menu items that might be at the start of the modal text
+        const cleanMsg = result.text.split('\n')
+          .map(line => line.trim())
+          .find(line => line.length > 10 && line.match(/Request|success|thành công|đã gửi|submitted/i)) 
+          || "Request has been sent";
+        
+        log.success(`CocCoc: ${cleanMsg}`);
       } else if (result && result.status === 'error') {
         throw new Error(`CocCoc site returned error: ${result.message}`);
       } else {
